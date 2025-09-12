@@ -11,15 +11,15 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/prepmate-krishna/Preplift.git"
+    "url": "git+https://github.com/prepmate-krishna/PrepMate.git"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/prepmate-krishna/Preplift/issues"
+    "url": "https://github.com/prepmate-krishna/PrepMate/issues"
   },
-  "homepage": "https://github.com/prepmate-krishna/Preplift#readme",
+  "homepage": "https://github.com/prepmate-krishna/PrepMate#readme",
   "dependencies": {
     "next": "^15.5.2",
     "react": "^19.1.1",
