@@ -1,7 +1,9 @@
 /*
-  shim: pages/lib/supabase.js
-  Re-exports the real lib located at the repository root (../.. /lib/supabase).
-  This keeps existing relative imports working for files under pages/pages/...
+  pages/lib/supabase.js (shim)
+  Import the real helpers from the repo root and re-export named/default exports.
+  This avoids using `export * from` which Next disallows inside pages/.
 */
-export * from "../../lib/supabase.js";
-export { default } from "../../lib/supabase.js";
+import supabaseDefault, { supabaseAdmin, supabaseClient } from "../../lib/supabase.js";
+
+export { supabaseAdmin, supabaseClient };
+export default supabaseDefault;
