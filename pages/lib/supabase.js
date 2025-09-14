@@ -1,9 +1,13 @@
 /*
   pages/lib/supabase.js (shim)
-  Import the real helpers from the repo root and re-export named/default exports.
-  This avoids using `export * from` which Next disallows inside pages/.
+  Re-exports named exports from the real lib at repo root,
+  and provides a harmless default React component to satisfy Next.js page rules.
 */
-import supabaseDefault, { supabaseAdmin, supabaseClient } from "../../lib/supabase.js";
+import React from "react";
+import supabaseDefault, { supabaseAdmin, supabaseClient, supabase } from "../../lib/supabase.js";
 
-export { supabaseAdmin, supabaseClient };
-export default supabaseDefault;
+export { supabaseAdmin, supabaseClient, supabase };
+export default function SupabaseShimPage() {
+  // This page shouldn't be visited — it's a shim to satisfy imports during build.
+  return null;
+}
