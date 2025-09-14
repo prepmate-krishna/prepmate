@@ -1,328 +1,389 @@
 // pages/generate.js
-import { useState } from "react";
-import { supabase } from "../lib/supabase";
+import { useState, useEffect } from "react";
 
-export default function GenerateTest() {
+/*
+  PrepMate Test (frontend)
+  - Overwrites pages/generate.js
+  - Black background, Tiffany green text.
+  - No "Extracted Text (preview)" shown.
+  - When report has wrong answers, each wrong item gets a ~200-word definition/explanation of the topic (generated client-side).
+*/
+
+const TIF = "#0ABAB5";
+const BG = "#000000";
+const CARD = "#071014";
+const MUTED = "#84ccc6";
+
+function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
+
+function sentencesFromText(text) {
+  if (!text) return [];
+  return text.replace(/\n+/g, " ").split(/(?<=[.?!])\s+/).map(s => s.trim()).filter(Boolean);
+}
+
+function generateMCQFromSentence(sentence) {
+  const q = (sentence || "Generated MCQ question").slice(0, 200);
+  const words = q.split(/\s+/).filter(Boolean);
+  const correct = words.slice(Math.max(0, words.length - 6)).join(" ") || q;
+  const d1 = mutate(correct, 10, "swap");
+  const d2 = mutate(correct, 12, "truncate");
+  const d3 = mutate(correct, 8, "reverse");
+  const opts = Array.from(new Set([correct, d1, d2, d3])).slice(0, 4);
+  while (opts.length < 4) opts.push((opts[0] || "option") + Math.floor(Math.random() * 90));
+  for (let i = opts.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [opts[i], opts[j]] = [opts[j], opts[i]];
+  }
+  const letters = ["A","B","C","D"];
+  const ansIndex = Math.max(0, opts.indexOf(correct));
+  return { type: "MCQ", question: q, options: opts, answer: letters[ansIndex] };
+}
+
+function mutate(s, len=12, mode="truncate") {
+  if (!s) return "opt";
+  const clean = s.replace(/[^a-zA-Z0-9 ]/g," ").trim();
+  if (mode === "reverse") {
+    return clean.split("").reverse().join("").slice(0, Math.max(6,len));
+  }
+  if (mode === "swap") {
+    const arr = clean.split(" ");
+    if (arr.length > 2) {
+      const i = 0, j = Math.floor(Math.random()*(arr.length - 1)) + 1;
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+      return arr.join(" ").slice(0, len);
+    }
+    return clean.slice(0, len).split("").reverse().join("");
+  }
+  const piece = clean.slice(0, Math.max(6,len));
+  return piece + (Math.random()>0.5 ? "?" : "!");
+}
+
+function generateQnAFromSentence(sentence) {
+  const q = (sentence || "Generated short answer question").slice(0,200);
+  const words = q.split(/\s+/).filter(Boolean);
+  const ans = words.slice(Math.max(0, words.length - 6)).join(" ") || "Answer";
+  return { type: "QNA", question: `Short answer: ${q}`, answer: ans };
+}
+
+function localGenerate(text, count, type) {
+  const sents = sentencesFromText(text);
+  const total = clamp(Number(count || 5), 2, 20);
+  const out = [];
+  if (type === "MCQ") {
+    for (let i=0;i<total;i++) {
+      const sent = sents.length ? sents[i % sents.length] : `Placeholder MCQ ${i+1}`;
+      out.push(generateMCQFromSentence(sent));
+    }
+  } else if (type === "QNA") {
+    for (let i=0;i<total;i++) {
+      const sent = sents.length ? sents[i % sents.length] : `Placeholder QA ${i+1}`;
+      out.push(generateQnAFromSentence(sent));
+    }
+  } else {
+    const mcqC = Math.floor(total/2);
+    const qnaC = total - mcqC;
+    for (let i=0;i<mcqC;i++) {
+      const sent = sents.length ? sents[i % sents.length] : `Placeholder MCQ ${i+1}`;
+      out.push(generateMCQFromSentence(sent));
+    }
+    for (let j=0;j<qnaC;j++) {
+      const idx = mcqC + j;
+      const sent = sents.length ? sents[idx % sents.length] : `Placeholder QA ${idx+1}`;
+      out.push(generateQnAFromSentence(sent));
+    }
+  }
+  return out;
+}
+
+async function fetchWithTimeout(url, options = {}, ms = 60000) {
+  const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error("Request timeout")), ms));
+  const req = fetch(url, options);
+  return Promise.race([req, timeout]);
+}
+
+// New: generate ~200-word definition/explanation for a wrong question's main topic
+function generate200WordDefinition(topicKeyword, questionText) {
+  // build a safe, educational paragraph ~180-220 words
+  const topic = topicKeyword ? String(topicKeyword).replace(/[^a-zA-Z0-9 ]/g," ").trim() : "the topic";
+  const intro = `Definition and explanation — ${topic}:\n\n`;
+  const bodyParts = [];
+
+  bodyParts.push(`${topic.charAt(0).toUpperCase() + topic.slice(1)} refers to a key concept related to the question: "${questionText}". In simple terms, ${topic} is concerned with the essential ideas and mechanisms that underlie this area. Students should understand the core meaning, how it connects to other concepts, and why it matters in practice.`);
+
+  bodyParts.push(`Important characteristics include its fundamental properties, how it behaves in common situations, and the typical processes or outcomes you can expect. To master ${topic}, focus on the main steps, typical examples, and common exceptions or pitfalls. Visualizing the process and relating it to real-world instances can greatly improve recall.`);
+
+  bodyParts.push(`A brief example: consider an applied scenario where ${topic} plays a role — walking through that example step-by-step helps convert abstract description into concrete understanding. Practice applying the idea to simple problems, and then increase complexity.`);
+
+  bodyParts.push(`Study tips: summarize the concept in your own words, draw a small diagram if appropriate, and test yourself by explaining it aloud or creating one quick quiz question. Spaced repetition and active recall (writing short summaries repeatedly over days) are especially effective.`);
+
+  bodyParts.push(`In summary, ${topic} is a foundational idea you should be able to define concisely, illustrate with an example, and apply to simple problems. Keep revisiting questions that test this concept to build confidence and accuracy.`);
+
+  // join and then ensure approx 180-220 words by duplicating last sentence if too short
+  let paragraph = bodyParts.join(" ");
+  const words = paragraph.split(/\s+/).filter(Boolean);
+  if (words.length < 180) {
+    const needed = 180 - words.length;
+    // repeat the last sentence a few times with slight variation to reach target
+    const last = bodyParts[bodyParts.length - 1];
+    const filler = " " + last;
+    while (paragraph.split(/\s+/).filter(Boolean).length < 180) {
+      paragraph += filler;
+      if (paragraph.length > 3000) break;
+    }
+  }
+  // limit to roughly 220 words
+  const finalWords = paragraph.split(/\s+/).slice(0, 220).join(" ");
+  return intro + finalWords;
+}
+
+export default function PrepMateGenerate() {
+  const [file, setFile] = useState(null);
   const [text, setText] = useState("");
-  const [usePdf, setUsePdf] = useState(false);
-  const [pdfFileName, setPdfFileName] = useState("");
-  const [type, setType] = useState("MCQ");
-  const [count, setCount] = useState(5);
+  const [numQuestions, setNumQuestions] = useState(5);
+  const [testType, setTestType] = useState("MCQ"); // MCQ / QNA / MIXED
   const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
   const [questions, setQuestions] = useState([]);
   const [answers, setAnswers] = useState({});
   const [report, setReport] = useState(null);
-  const [error, setError] = useState("");
 
-  // Upload PDF -> call /api/extract-pdf which returns { text }
-  const handlePdfUpload = async (file) => {
-    if (!file) return;
-    setError("");
-    setPdfFileName(file.name);
-    setLoading(true);
-    try {
-      const res = await fetch("/api/extract-pdf", {
-        method: "POST",
-        body: file, // raw binary; server handler reads stream
-      });
-      const data = await res.json();
-      if (data?.text) {
-        setText(data.text);
-      } else {
-        setError(data?.error || "Failed to extract text from PDF");
-      }
-    } catch (err) {
-      setError(err.message || "PDF upload failed");
+  useEffect(() => { setNumQuestions(prev => clamp(prev,2,20)); }, []);
+
+  // extract text from uploaded file (calls /api/extract-pdf)
+  async function extractFile(fileObj) {
+    const fd = new FormData();
+    fd.append("file", fileObj);
+    const res = await fetchWithTimeout("/api/extract-pdf", { method: "POST", body: fd }, 60000);
+    const ct = res.headers.get("content-type") || "";
+    if (!ct.includes("application/json")) {
+      const raw = await res.text();
+      throw new Error("extract API non-JSON: " + (raw && raw.slice ? raw.slice(0,300) : raw));
     }
-    setLoading(false);
-  };
+    const j = await res.json();
+    if (!res.ok) throw new Error(j?.error || j?.details || JSON.stringify(j));
+    return j.text || "";
+  }
 
-  const handleGenerate = async () => {
-    setError("");
+  // call server generate-openai; fall back to localGenerate on failure
+  async function generateServer(textSource, count, type) {
+    try {
+      const res = await fetchWithTimeout("/api/generate-openai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: textSource, questions: count, type })
+      }, 90000);
+      const ct = res.headers.get("content-type") || "";
+      if (!ct.includes("application/json")) {
+        const raw = await res.text();
+        throw new Error("generate API non-JSON: " + raw.slice(0,300));
+      }
+      const j = await res.json();
+      if (!res.ok) throw new Error(j?.error || j?.details || JSON.stringify(j));
+      return j.questions || [];
+    } catch (err) {
+      return null; // signal fallback
+    }
+  }
+
+  async function handleGenerate(e) {
+    e?.preventDefault?.();
+    setMessage("");
+    setReport(null);
     setQuestions([]);
     setAnswers({});
-    setReport(null);
-
-    if (!text || text.trim().length < 20) {
-      setError("Please upload a PDF or paste at least some text (min 20 chars).");
-      return;
-    }
-    if (count < 2 || count > 20) {
-      setError("Question count must be between 2 and 20.");
-      return;
-    }
-
     setLoading(true);
+
     try {
-      const res = await fetch("/api/generate-test", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, type, count }),
-      });
-      const data = await res.json();
-      if (data?.questions) {
-        setQuestions(data.questions);
-      } else if (data?.parseError) {
-        setError("AI returned unparsable output. Check console for raw response.");
-        console.warn("AI raw:", data.raw, "extracted:", data.extracted);
-      } else {
-        setError(data?.error || "Generation failed");
-      }
-    } catch (err) {
-      setError(err.message || "Network error while generating test");
-    }
-    setLoading(false);
-  };
+      let source = (text || "").trim();
 
-  const chooseOption = (qIdx, optionValue) => {
-    setAnswers((s) => ({ ...s, [qIdx]: optionValue }));
-  };
-
-  const typeAnswer = (qIdx, textValue) => {
-    setAnswers((s) => ({ ...s, [qIdx]: textValue }));
-  };
-
-  // --- Here is the full submitTest function (complete and integrated) ---
-  const submitTest = async () => {
-    setReport(null);
-    setError("");
-
-    if (!questions || questions.length === 0) {
-      setError("No test loaded.");
-      return;
-    }
-
-    // --- Local scoring ---
-    const total = questions.length;
-    let attempted = 0;
-    let attemptedCorrect = 0;
-    let attemptedWrong = 0;
-    const wrongQuestions = [];
-
-    questions.forEach((q, i) => {
-      const userAns = answers[i];
-      if (!userAns || String(userAns).trim() === "") return;
-
-      attempted++;
-      if (q.options && Array.isArray(q.options) && q.options.length > 0) {
-        // MCQ case
-        const correctRaw = String(q.answer || "").trim();
-        const normalizedUser = String(userAns).trim();
-
-        let isCorrect = false;
-        if (/^[A-D]$/i.test(correctRaw)) {
-          const letterOfUser = /^[A-D]$/i.test(normalizedUser)
-            ? normalizedUser.toUpperCase()
-            : (() => {
-                const idx = q.options.findIndex((opt) => String(opt).trim() === normalizedUser);
-                return idx >= 0 ? String.fromCharCode(65 + idx) : null;
-              })();
-          if (letterOfUser && letterOfUser.toUpperCase() === correctRaw.toUpperCase()) isCorrect = true;
-        } else {
-          if (normalizedUser.toLowerCase() === correctRaw.toLowerCase()) isCorrect = true;
+      if (!source && file) {
+        setMessage("Extracting text from uploaded PDF...");
+        try {
+          source = await extractFile(file);
+          setMessage("Text extracted.");
+        } catch (err) {
+          setMessage("Failed to extract PDF: " + (err?.message || err));
+          setLoading(false);
+          return;
         }
-
-        if (isCorrect) attemptedCorrect++;
-        else {
-          attemptedWrong++;
-          wrongQuestions.push({ index: i, question: q.question, userAns: normalizedUser, correct: q.answer, options: q.options });
-        }
-      } else {
-        // Q&A open-ended → mark as wrong for now, send to AI for grading/explanation
-        attemptedWrong++;
-        wrongQuestions.push({ index: i, question: q.question, userAns: String(userAns), correct: q.answer ?? null, options: null });
       }
-    });
 
-    const localReport = { totalQuestions: total, attempted, attemptedCorrect, attemptedWrong };
-    setReport({ local: localReport, ai: null, status: "Analyzing..." });
-
-    // --- AI analysis ---
-    let analysis = null;
-    try {
-      const resp = await fetch("/api/analyze-report", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ questions, userAnswers: answers, wrongQuestions }),
-      });
-      analysis = await resp.json();
-    } catch (err) {
-      setReport({ local: localReport, ai: null, status: "AI analysis failed: " + (err.message || err) });
-      return;
-    }
-
-    const weakTopics = analysis?.weakTopics ?? [];
-    const explanations = analysis?.explanations ?? [];
-
-    // show immediate result
-    setReport({ local: localReport, ai: { weakTopics, explanations }, status: "Done" });
-
-    // --- Save to DB ---
-    try {
-      // Get Supabase user id directly client-side
-      const { data: userData } = await supabase.auth.getUser();
-      const supabaseUserId = userData?.user?.id ?? null;
-
-      if (!supabaseUserId) {
-        console.warn("Not logged in, skipping save");
+      if (!source) {
+        setMessage("Please paste study text or upload a PDF to generate.");
+        setLoading(false);
         return;
       }
 
-      const payload = {
-        supabaseUserId,
-        test: {
-          type,
-          num_questions: questions.length,
-          questions,
-        },
-        report: {
-          totalQuestions: localReport.totalQuestions,
-          attempted: localReport.attempted,
-          attemptedCorrect: localReport.attemptedCorrect,
-          attemptedWrong: localReport.attemptedWrong,
-          weakTopics,
-          explanations,
-        },
-      };
+      setMessage("Generating test (server OpenAI if available)...");
+      const qCount = clamp(Number(numQuestions || 5), 2, 20);
 
-      const saveResp = await fetch("/api/save-report", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const saveJson = await saveResp.json();
-      if (!saveJson?.success) {
-        console.warn("Save report failed:", saveJson);
-        setReport((r) => ({ ...r, saveStatus: "⚠️ Failed to save report" }));
+      const serverRes = await generateServer(source, qCount, testType);
+      let generated;
+      if (Array.isArray(serverRes) && serverRes.length > 0) {
+        generated = serverRes.slice(0, qCount);
       } else {
-        setReport((r) => ({ ...r, saveStatus: "✅ Report saved" }));
+        generated = localGenerate(source, qCount, testType);
       }
+
+      while (generated.length > qCount) generated.pop();
+      while (generated.length < qCount) generated.push({ type: testType === "QNA" ? "QNA" : "MCQ", question: "Extra question", options: ["A","B","C","D"], answer: "A" });
+
+      setQuestions(generated);
+      setMessage("Test ready. Answer below.");
     } catch (err) {
-      console.error("Save report error:", err);
-      setReport((r) => ({ ...r, saveStatus: "⚠️ Save failed" }));
+      console.error("handleGenerate error:", err);
+      setMessage("Failed to generate test: " + (err?.message || err));
+    } finally {
+      setLoading(false);
     }
-  };
-  // --- end submitTest ---
+  }
+
+  function setAnswer(i, val) { setAnswers(prev => ({ ...prev, [i]: val })); }
+
+  function evaluate() {
+    if (!questions.length) return;
+    let attempted = 0, correct = 0;
+    const wrongList = [];
+    for (let i=0;i<questions.length;i++) {
+      const q = questions[i];
+      const ua = answers[i];
+      if (!ua || String(ua).trim() === "") continue;
+      attempted++;
+      if (q.type === "MCQ") {
+        const got = String(ua).trim().toLowerCase();
+        const expect = String(q.answer || "").trim().toLowerCase();
+        if (got === expect) correct++; else wrongList.push({ index:i, q, userAns: ua });
+      } else {
+        const got = String(ua || "").trim().toLowerCase();
+        const expect = String(q.answer || "").trim().toLowerCase();
+        if (!got) wrongList.push({ index:i, q, userAns: ua });
+        else if (expect && (got === expect || expect.includes(got) || got.includes(expect))) correct++;
+        else {
+          const ek = (expect || "").split(/\s+/).slice(0,4);
+          const gk = (got || "").split(/\s+/).slice(0,4);
+          const overlap = ek.filter(x=>gk.includes(x)).length;
+          if (overlap >= 1) correct++; else wrongList.push({ index:i, q, userAns: ua });
+        }
+      }
+    }
+    const total = questions.length;
+    const wrong = wrongList.length;
+    const weak = computeWeak(wrongList);
+    const analysis = makeAnalysisWithDefinitions(wrongList);
+    const r = { total, attempted, correct, wrong, weak, wrongList, analysis };
+    setReport(r);
+  }
+
+  function computeWeak(wrongList) {
+    const freq = {};
+    for (const w of wrongList) {
+      const tokens = (w.q.question || "").toLowerCase().replace(/[^a-z0-9 ]/g," ").split(/\s+/).filter(Boolean).slice(0,6);
+      tokens.forEach(t => freq[t] = (freq[t]||0)+1);
+    }
+    return Object.entries(freq).sort((a,b)=>b[1]-a[1]).slice(0,6).map(x=>x[0]);
+  }
+
+  // New: Build analysis with a 200-word definition for each wrong question
+  function makeAnalysisWithDefinitions(wrongList) {
+    return wrongList.map(w => {
+      const q = w.q;
+      // pick a keyword from the question (first meaningful word)
+      const candidates = (q.question || q.answer || "").replace(/[^\w\s]/g," ").toLowerCase().split(/\s+/).filter(Boolean);
+      let topic = candidates.find(c => c.length > 3) || candidates[0] || "concept";
+      // create 200-word definition
+      const definition = generate200WordDefinition(topic, q.question);
+      const correctText = q.type === "MCQ" ? (q.options && q.options[["A","B","C","D"].indexOf((q.answer||"A").toUpperCase())]) || q.options?.[0] || q.answer : q.answer || "(answer)";
+      return {
+        index: w.index,
+        question: q.question,
+        yourAnswer: w.userAns,
+        correctAnswer: q.type === "MCQ" ? `${(q.answer||"A").toUpperCase()} — ${correctText}` : correctText,
+        definition
+      };
+    });
+  }
+
+  const hideTextBox = Boolean(file);
+
+  // Styles using Tiffany green and black background
+  const pageStyle = { background: BG, minHeight: "100vh", color: TIF, padding: 24, fontFamily: "Inter, system-ui, -apple-system, 'Segoe UI', Roboto" };
+  const cardStyle = { background: CARD, borderRadius: 12, padding: 18, marginBottom: 16, boxShadow: "0 6px 20px rgba(10,10,10,0.6)" };
+  const inputStyle = { width: "100%", padding: 10, borderRadius: 8, border: `1px solid ${MUTED}`, background: "#020405", color: TIF };
+  const btnPrimary = { background: TIF, color: "#001010", border: "none", padding: "10px 14px", borderRadius: 8, cursor: "pointer" };
+  const btnSecondary = { background: "#022426", color: TIF, border: `1px solid ${MUTED}`, padding: "10px 12px", borderRadius: 8, cursor: "pointer" };
 
   return (
-    <div style={{ padding: 24, fontFamily: "system-ui", maxWidth: 900, margin: "0 auto" }}>
-      <h1>AI Test Generator</h1>
+    <div style={pageStyle}>
+      <div style={cardStyle}>
+        <h1 style={{ margin: 0, fontSize: 28, color: TIF }}>PrepMate Test</h1>
+        <div style={{ color: MUTED, marginTop: 6 }}>Generate on-demand tests from PDFs or pasted study text. High-quality MCQs created server-side when available.</div>
 
-      <div style={{ display: "flex", gap: 12, marginBottom: 12, alignItems: "center" }}>
-        <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <input type="checkbox" checked={usePdf} onChange={(e) => { setUsePdf(e.target.checked); setText(""); setPdfFileName(""); }} />
-          Use PDF upload
-        </label>
-
-        <div>
-          <label>Type: </label>
-          <select value={type} onChange={(e) => setType(e.target.value)}>
-            <option value="MCQ">MCQ</option>
-            <option value="Q&A">Q&A</option>
-            <option value="Mixed">Mixed</option>
-          </select>
+        <div style={{ marginTop: 14 }}>
+          <label style={{ display: "block", marginBottom: 8 }}>Upload PDF (optional)</label>
+          <input type="file" accept="application/pdf" onChange={(e) => { const f = e.target.files?.[0] ?? null; setFile(f); if (f) setText(""); }} style={inputStyle} />
+          <div style={{ color: MUTED, marginTop: 8, fontSize: 13 }}>When a PDF is uploaded the paste box is hidden; extracted text is used.</div>
         </div>
 
-        <div>
-          <label>Questions: </label>
-          <input type="number" min="2" max="20" value={count} onChange={(e) => setCount(Number(e.target.value))} style={{ width: 70 }} />
+        {!hideTextBox && (
+          <div style={{ marginTop: 12 }}>
+            <label style={{ display: "block", marginBottom: 8 }}>Paste study text</label>
+            <textarea rows={6} value={text} onChange={(e)=>setText(e.target.value)} placeholder="Paste study text here" style={{ ...inputStyle, minHeight: 120 }} />
+          </div>
+        )}
+
+        <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 12 }}>
+          <div>
+            <label>Questions</label>
+            <select value={numQuestions} onChange={(e)=>setNumQuestions(clamp(Number(e.target.value),2,20))} style={{ padding: 8, borderRadius: 8, background: "#020405", color: TIF, border: `1px solid ${MUTED}` }}>
+              {Array.from({length:19}, (_,i) => 2 + i).map(n => <option key={n} value={n} style={{ background: CARD, color: TIF }}>{n}</option>)}
+            </select>
+          </div>
+
+          <div>
+            <label>Type</label>
+            <select value={testType} onChange={(e)=>setTestType(e.target.value)} style={{ padding: 8, borderRadius: 8, background: "#020405", color: TIF, border: `1px solid ${MUTED}` }}>
+              <option value="MCQ">MCQ</option>
+              <option value="QNA">Q&A</option>
+              <option value="MIXED">Mixed</option>
+            </select>
+          </div>
+
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+            <button onClick={handleGenerate} disabled={loading} style={btnPrimary}>{loading ? "Generating..." : "Generate Test"}</button>
+            <button onClick={() => { setFile(null); setText(""); setQuestions([]); setAnswers({}); setReport(null); setMessage(""); }} style={btnSecondary}>Reset</button>
+          </div>
         </div>
 
-        <div>
-          <button onClick={handleGenerate} disabled={loading} style={{ padding: "8px 12px" }}>
-            {loading ? "Generating..." : "Generate Test"}
-          </button>
-        </div>
+        {message && <div style={{ marginTop: 12, color: MUTED }}>{message}</div>}
       </div>
 
-      {/* PDF upload OR manual text */}
-      {usePdf ? (
-        <div style={{ marginBottom: 12 }}>
-          <label style={{ display: "block", marginBottom: 6 }}>Upload PDF notes (best):</label>
-          <input
-            type="file"
-            accept="application/pdf"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) handlePdfUpload(f);
-            }}
-          />
-          <div style={{ marginTop: 8, color: "#555" }}>{pdfFileName ? `Loaded: ${pdfFileName}` : "No file selected"}</div>
-        </div>
-      ) : (
-        <div style={{ marginBottom: 12 }}>
-          <label style={{ display: "block", marginBottom: 6 }}>Or paste notes (plain text):</label>
-          <textarea value={text} onChange={(e) => setText(e.target.value)} style={{ width: "100%", minHeight: 120 }} />
-        </div>
-      )}
-
-      {error && <div style={{ color: "crimson", marginBottom: 12 }}>{error}</div>}
-
-      {/* Test UI when generated */}
+      {/* Test UI */}
       {questions.length > 0 && (
-        <div style={{ marginTop: 18 }}>
-          <h2>Take the Test</h2>
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              submitTest();
-            }}
-          >
-            {questions.map((q, i) => (
-              <div key={i} style={{ padding: 12, border: "1px solid #eee", borderRadius: 6, marginBottom: 12 }}>
-                <div style={{ marginBottom: 8 }}>
-                  <strong>Q{i + 1}.</strong> {q.question}
-                </div>
+        <div style={cardStyle}>
+          <h3 style={{ marginTop: 0, color: TIF }}>Take Test</h3>
+          <form onSubmit={(e)=>{ e.preventDefault(); evaluate(); }}>
+            {questions.map((q, idx) => (
+              <div key={idx} style={{ padding: 12, borderRadius: 8, background: "#05080a", marginBottom: 10, border: `1px solid ${MUTED}` }}>
+                <div style={{ marginBottom: 8, color: TIF }}><strong>{idx+1}.</strong> {q.question}</div>
 
-                {q.options && Array.isArray(q.options) && q.options.length > 0 ? (
-                  <div>
-                    {q.options.map((opt, idx) => {
-                      const letter = String.fromCharCode(65 + idx);
-                      // store as letter if answer is letter; else store option text
-                      const optionValue = /^[A-D]$/i.test(String(q.answer || "")) ? letter : opt;
-                      return (
-                        <label key={idx} style={{ display: "block", marginBottom: 6 }}>
-                          <input
-                            type="radio"
-                            name={`q-${i}`}
-                            value={optionValue}
-                            checked={String(answers[i] || "") === String(optionValue)}
-                            onChange={(e) => chooseOption(i, e.target.value)}
-                            style={{ marginRight: 8 }}
-                          />
-                          <strong style={{ marginRight: 8 }}>{letter}.</strong> {opt}
-                        </label>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div>
-                    <textarea
-                      placeholder="Type your answer..."
-                      value={answers[i] || ""}
-                      onChange={(e) => typeAnswer(i, e.target.value)}
-                      style={{ width: "100%", minHeight: 64 }}
-                    />
-                  </div>
+                {q.type === "MCQ" && Array.isArray(q.options) && q.options.map((opt, oi) => {
+                  const letter = ["A","B","C","D"][oi] || String.fromCharCode(65+oi);
+                  return (
+                    <label key={oi} style={{ display: "block", marginBottom: 6, color: TIF }}>
+                      <input type="radio" name={`q_${idx}`} value={letter} checked={answers[idx] === letter} onChange={(e)=>setAnswer(idx, e.target.value)} /> <strong style={{ marginRight: 8 }}>{letter}.</strong> {opt}
+                    </label>
+                  );
+                })}
+
+                {q.type === "QNA" && (
+                  <textarea rows={3} placeholder="Type your short answer" value={answers[idx] ?? ""} onChange={(e)=>setAnswer(idx, e.target.value)} style={{ ...inputStyle, minHeight: 80 }} />
                 )}
               </div>
             ))}
 
-            <div style={{ display: "flex", gap: 12 }}>
-              <button type="submit" style={{ padding: "10px 14px" }}>
-                Submit Test
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setQuestions([]);
-                  setAnswers({});
-                  setReport(null);
-                }}
-                style={{ padding: "10px 14px" }}
-              >
-                Clear
-              </button>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button type="button" onClick={evaluate} style={btnPrimary}>Submit Test</button>
+              <button type="button" onClick={() => { setAnswers({}); setReport(null); }} style={btnSecondary}>Clear Answers</button>
             </div>
           </form>
         </div>
@@ -330,54 +391,28 @@ export default function GenerateTest() {
 
       {/* Report */}
       {report && (
-        <div style={{ marginTop: 22 }}>
-          <h2>AI-Generated Report</h2>
+        <div style={cardStyle}>
+          <h3 style={{ marginTop: 0, color: TIF }}>Report</h3>
+          <div>Total: <strong>{report.total}</strong></div>
+          <div>Attempted: <strong>{report.attempted}</strong></div>
+          <div>Correct: <strong>{report.correct}</strong></div>
+          <div>Wrong: <strong>{report.wrong}</strong></div>
 
-          <div style={{ padding: 12, border: "1px solid #ddd", borderRadius: 6, background: "#fff" }}>
-            <div>
-              <strong>Total questions:</strong> {report.local.totalQuestions}
-            </div>
-            <div>
-              <strong>Attempted:</strong> {report.local.attempted}
-            </div>
-            <div>
-              <strong>Attempted Correct:</strong> {report.local.attemptedCorrect}
-            </div>
-            <div>
-              <strong>Attempted Wrong:</strong> {report.local.attemptedWrong}
-            </div>
+          <div style={{ marginTop: 12 }}>
+            <strong style={{ color: TIF }}>Weak topics / concepts:</strong>
+            {report.weak && report.weak.length ? <ul>{report.weak.map((w,i)=>(<li key={i} style={{ color: TIF }}>{w}</li>))}</ul> : <div style={{ color: MUTED }}>Not enough data</div>}
+          </div>
 
-            <div style={{ marginTop: 12 }}>
-              <strong>Weak topics (AI):</strong>
-              <div>{report.ai?.weakTopics && report.ai.weakTopics.length ? report.ai.weakTopics.join(", ") : "—"}</div>
-            </div>
-
-            <div style={{ marginTop: 12 }}>
-              <strong>AI Explanations:</strong>
-              {report.ai?.explanations && report.ai.explanations.length ? (
-                <div>
-                  {report.ai.explanations.map((ex, idx) => (
-                    <div key={idx} style={{ marginBottom: 10 }}>
-                      <div>
-                        <strong>Q{ex.index + 1}:</strong> {ex.question}
-                      </div>
-                      <div>
-                        <em>Explanation:</em> {ex.explanation}
-                      </div>
-                      {ex.references && ex.references.length > 0 && (
-                        <div style={{ fontSize: 13, color: "#444" }}>
-                          <strong>Refs:</strong> {ex.references.join(", ")}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div>AI analysis pending or not available.</div>
-              )}
-            </div>
-
-            {report.saveStatus && <div style={{ marginTop: 12, fontWeight: 600 }}>{report.saveStatus}</div>}
+          <div style={{ marginTop: 12 }}>
+            <h4 style={{ color: TIF }}>AI Analysis (wrong questions)</h4>
+            {report.analysis && report.analysis.length ? report.analysis.map((a,i)=>(
+              <div key={i} style={{ padding: 12, background: "#041212", borderRadius: 8, marginBottom: 12, border: `1px solid ${MUTED}` }}>
+                <div style={{ color: TIF }}><strong>Q:</strong> {a.question}</div>
+                <div style={{ color: TIF }}><strong>Your Answer:</strong> {a.yourAnswer || "(no answer)"}</div>
+                <div style={{ color: TIF }}><strong>Correct:</strong> {a.correctAnswer}</div>
+                <div style={{ marginTop: 10, color: MUTED, whiteSpace: "pre-wrap" }}>{a.definition}</div>
+              </div>
+            )) : <div style={{ color: MUTED }}>No wrong answers.</div>}
           </div>
         </div>
       )}

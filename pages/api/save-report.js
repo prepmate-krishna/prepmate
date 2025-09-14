@@ -18,7 +18,7 @@ Expected POST body:
   userId: "<public.users.id UUID>",            // optional if you want to store reference to users table id
   generatedFromUploadId: "<optional upload id>", // optional
   test: {
-    type: "MCQ" | "Q&A" | "Mixed",
+    type: "MCQ" | "Q&A" | "Mixed" | "scheduled",
     num_questions: 5,
     questions: [ { question, options?, answer } ... ]
   },
@@ -28,7 +28,7 @@ Expected POST body:
     attemptedCorrect: number,
     attemptedWrong: number,
     weakTopics: [ ... ],
-    explanations: [ { index, question, explanation, references? } ... ]
+    explanations: [ { index, question?, explanation, references? } ... ]
   }
 }
 Response: { success: true, testId: "...", reportId: "..." }
@@ -123,15 +123,53 @@ export default async function handler(req, res) {
 
     const reportId = repIns && repIns.length > 0 ? repIns[0].id : null;
 
+    // --- AUTO-ANALYZE FOR PAID USERS (Prime / Elite / Elite+) ---
+    try {
+      const { data: userRows, error: uErr } = await sb
+        .from("users")
+        .select("id, plan, parent_phone, parent_verified")
+        .eq("id", finalUserId)
+        .limit(1);
+
+      if (!uErr && Array.isArray(userRows) && userRows.length > 0) {
+        const user = userRows[0];
+        const paidPlans = ["prime", "elite", "elite+"];
+        if (user.plan && paidPlans.includes(String(user.plan).toLowerCase())) {
+          const serverBase = process.env.SERVER_BASE_URL || "http://localhost:3000";
+          (async () => {
+            try {
+              const resp = await fetch(`${serverBase}/api/analyze-report`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ reportId })
+              });
+              if (!resp.ok) {
+                const txt = await resp.text();
+                console.warn("Auto-analyze failed:", resp.status, txt);
+              } else {
+                const json = await resp.json();
+                console.log("Auto-analyze success for report", reportId, json?.ai ? "ai data saved" : "");
+              }
+            } catch (e) {
+              console.warn("Auto-analyze request error:", e?.message ?? e);
+            }
+          })();
+        }
+      } else if (uErr) {
+        console.warn("Could not read user plan for auto-analyze:", uErr);
+      }
+    } catch (e) {
+      console.warn("Auto-analyze wrapper error (ignored):", e?.message ?? e);
+    }
+    // --- END AUTO-ANALYZE ---
+
     return res.status(200).json({ success: true, testId, reportId });
   } catch (err) {
-  // improved logging: include message and stack so you can read terminal output
-  console.error("save-report error:", err);
-  return res.status(500).json({
-    error: "Server error",
-    details: err?.message ?? String(err),
-    stack: err?.stack ?? null
-  });
-}
-
+    console.error("save-report error:", err);
+    return res.status(500).json({
+      error: "Server error",
+      details: err?.message ?? String(err),
+      stack: err?.stack ?? null
+    });
   }
+}

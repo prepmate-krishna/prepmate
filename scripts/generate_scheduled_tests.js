@@ -72,7 +72,6 @@ async function fetchDueSchedules() {
 }
 
 async function getRecentUploadsForUser(user_id, limit = 5) {
-  // fetch some metadata about uploads. If created_at doesn't exist this may return error.
   const { data, error } = await sb
     .from("uploads")
     .select("id, filename, path, bucket, mime, size, created_at")
@@ -81,7 +80,6 @@ async function getRecentUploadsForUser(user_id, limit = 5) {
     .limit(limit);
 
   if (error) {
-    // return empty array if uploads table has different schema
     console.warn("Error fetching uploads for user", user_id, error.message);
     return [];
   }
@@ -108,7 +106,6 @@ async function generateTestWithOpenAI(prompt, count = 5, type = "MCQ") {
   const raw = resp.choices?.[0]?.message?.content ?? "";
   const cleaned = raw.replace(/```(?:json)?\s*([\s\S]*?)```/gi, "$1").trim();
 
-  // Try parse; fallback to extract first array
   try {
     return JSON.parse(cleaned);
   } catch (e) {
@@ -183,8 +180,7 @@ async function sendWhatsappReminder(user_id, scheduledTestId, testPayload) {
       body: message,
     });
     console.log("✅ WhatsApp reminder sent to", phone);
-    // Optionally log to reminder_logs table
-    const { error } = await sb.from("reminder_logs").insert([{
+    await sb.from("reminder_logs").insert([{
       scheduled_test_id: scheduledTestId,
       user_id,
       channel: "whatsapp",
@@ -192,10 +188,8 @@ async function sendWhatsappReminder(user_id, scheduledTestId, testPayload) {
       success: true,
       meta: { sent_at: isoNow() },
     }]);
-    if (error) console.warn("Failed to insert reminder log:", error.message);
   } catch (err) {
     console.error("❌ Failed to send WhatsApp message:", err?.message ?? err);
-    // log failure
     await sb.from("reminder_logs").insert([{
       scheduled_test_id: scheduledTestId,
       user_id,
@@ -208,6 +202,178 @@ async function sendWhatsappReminder(user_id, scheduledTestId, testPayload) {
 }
 
 //
+// --- REPLACED: process existing pending scheduled_tests (user + parent notify) ---
+// This replaces earlier simple processing; it includes parent notify for Elite/Elite+
+async function fetchDueScheduledTestsAndNotify() {
+  const nowIso = new Date().toISOString();
+  const { data: dueRows, error } = await sb
+    .from("scheduled_tests")
+    .select("id, user_id, test_payload, scheduled_for, status")
+    .lte("scheduled_for", nowIso)
+    .eq("status", "pending")
+    .order("scheduled_for", { ascending: true })
+    .limit(50);
+
+  if (error) {
+    console.warn("fetchDueScheduledTestsAndNotify error:", error.message || error);
+    return [];
+  }
+  if (!dueRows || dueRows.length === 0) return [];
+
+  for (const row of dueRows) {
+    try {
+      console.log("Processing pending scheduled_test", row.id, "user", row.user_id);
+
+      // 1) Send user WhatsApp reminder
+      await sendWhatsappReminder(row.user_id, row.id, row.test_payload);
+
+      // 2) Parent notify: only for Elite / Elite+ users with verified parent_phone
+      try {
+        const { data: userRows, error: uErr } = await sb
+          .from("users")
+          .select("id, email, plan, parent_phone, parent_verified")
+          .eq("id", row.user_id)
+          .limit(1);
+
+        if (uErr) {
+          console.warn("Parent notify fetch error for user", row.user_id, uErr.message || uErr);
+        } else if (!userRows || userRows.length === 0) {
+          console.warn("Parent notify: user not found for id", row.user_id);
+        } else {
+          const userRow = userRows[0];
+          const plan = (userRow.plan || "").toLowerCase();
+          const isElite = plan === "elite" || plan === "elite+";
+          const phone = userRow.parent_phone ? String(userRow.parent_phone).trim() : null;
+          const verified = !!userRow.parent_verified;
+
+          if (isElite && phone && verified && twilioClient && TWILIO_FROM) {
+            const e164 = phone.startsWith("+") ? phone : `+91${phone}`;
+            try {
+              await twilioClient.messages.create({
+                from: TWILIO_FROM,
+                to: `whatsapp:${e164}`,
+                body: `Hello — PrepMate Alert:\n\nYour child (${userRow.email || "student"}) has a scheduled test ready. Test ID: ${row.id}`
+              });
+              console.log(`📢 Parent WhatsApp sent to ${e164} for scheduled_test ${row.id}`);
+            } catch (sendErr) {
+              console.error("Parent WhatsApp send error:", sendErr?.message ?? sendErr);
+            }
+          } else {
+            if (!isElite) console.log(`Skipping parent notify: user ${row.user_id} not in Elite/Elite+ (plan=${userRow.plan}).`);
+            if (!phone) console.log(`Skipping parent notify: no parent_phone for user ${row.user_id}.`);
+            if (!verified) console.log(`Skipping parent notify: parent not verified for user ${row.user_id}.`);
+          }
+        }
+      } catch (pnErr) {
+        console.warn("Parent notify inner error (ignored):", pnErr?.message ?? pnErr);
+      }
+
+      // 3) OPTIONAL: mark row as 'notified' to avoid repeated reminders.
+      // Uncomment if you want the scheduler to update status to 'notified' after sending.
+      /*
+      const { error: updErr } = await sb
+        .from("scheduled_tests")
+        .update({ status: "notified", updated_at: new Date().toISOString() })
+        .eq("id", row.id);
+      if (updErr) console.warn("Failed to update scheduled_test status for", row.id, updErr.message);
+      */
+
+    } catch (err) {
+      console.error("Error processing scheduled_test", row.id, err?.message ?? err);
+    }
+  }
+
+  return dueRows;
+// --- REPLACE existing fetchDueScheduledTestsAndNotify() with this ---
+async function fetchDueScheduledTestsAndNotify() {
+  const nowIso = new Date().toISOString();
+  const { data: dueRows, error } = await sb
+    .from("scheduled_tests")
+    .select("id, user_id, test_payload, scheduled_for, status")
+    .lte("scheduled_for", nowIso)
+    .eq("status", "pending")
+    .order("scheduled_for", { ascending: true })
+    .limit(50);
+
+  if (error) {
+    console.warn("fetchDueScheduledTestsAndNotify error:", error.message || error);
+    return [];
+  }
+  if (!dueRows || dueRows.length === 0) return [];
+
+  for (const row of dueRows) {
+    try {
+      console.log("Processing pending scheduled_test", row.id, "user", row.user_id);
+
+      // 1) Send user WhatsApp reminder
+      await sendWhatsappReminder(row.user_id, row.id, row.test_payload);
+
+      // 2) Parent notify: only for Elite / Elite+ users with verified parent_phone
+      try {
+        const { data: userRows, error: uErr } = await sb
+          .from("users")
+          .select("id, email, plan, parent_phone, parent_verified")
+          .eq("id", row.user_id)
+          .limit(1);
+
+        if (uErr) {
+          console.warn("Parent notify fetch error for user", row.user_id, uErr.message || uErr);
+        } else if (!userRows || userRows.length === 0) {
+          console.warn("Parent notify: user not found for id", row.user_id);
+        } else {
+          const userRow = userRows[0];
+          const plan = (userRow.plan || "").toLowerCase();
+          const isElite = plan === "elite" || plan === "elite+";
+          const phone = userRow.parent_phone ? String(userRow.parent_phone).trim() : null;
+          const verified = !!userRow.parent_verified;
+
+          if (isElite && phone && verified && twilioClient && TWILIO_FROM) {
+            const e164 = phone.startsWith("+") ? phone : `+91${phone}`;
+            try {
+              await twilioClient.messages.create({
+                from: TWILIO_FROM,
+                to: `whatsapp:${e164}`,
+                body: `Hello — PrepMate Alert:\n\nYour child (${userRow.email || "student"}) has a scheduled test ready. Test ID: ${row.id}`
+              });
+              console.log(`📢 Parent WhatsApp sent to ${e164} for scheduled_test ${row.id}`);
+            } catch (sendErr) {
+              console.error("Parent WhatsApp send error:", sendErr?.message ?? sendErr);
+            }
+          } else {
+            if (!isElite) console.log(`Skipping parent notify: user ${row.user_id} not in Elite/Elite+ (plan=${userRow.plan}).`);
+            if (!phone) console.log(`Skipping parent notify: no parent_phone for user ${row.user_id}.`);
+            if (!verified) console.log(`Skipping parent notify: parent not verified for user ${row.user_id}.`);
+          }
+        }
+      } catch (pnErr) {
+        console.warn("Parent notify inner error (ignored):", pnErr?.message ?? pnErr);
+      }
+
+      // 3) Mark row as 'notified' so we don't re-send repeatedly, add notified_at timestamp
+      try {
+        const { error: updErr } = await sb
+          .from("scheduled_tests")
+          .update({
+            status: "notified",
+            notified_at: isoNow(),
+            updated_at: isoNow()
+          })
+          .eq("id", row.id);
+        if (updErr) console.warn("Failed to update scheduled_test status for", row.id, updErr.message);
+      } catch (uErr) {
+        console.warn("Failed to set notified status (ignored):", uErr?.message ?? uErr);
+      }
+
+    } catch (err) {
+      console.error("Error processing scheduled_test", row.id, err?.message ?? err);
+    }
+  }
+
+  return dueRows;
+}
+}
+
+//
 // main
 async function main() {
   try {
@@ -215,31 +381,39 @@ async function main() {
     const due = await fetchDueSchedules();
     if (!due || due.length === 0) {
       console.log("No schedules due.");
-      return;
-    }
-    console.log("Found schedules due:", due.length);
+    } else {
+      console.log("Found schedules due:", due.length);
 
-    for (const schedule of due) {
-      const userId = schedule.user_id;
-      console.log("Processing schedule", schedule.id, "user", userId);
+      for (const schedule of due) {
+        const userId = schedule.user_id;
+        console.log("Processing schedule", schedule.id, "user", userId);
 
-      const uploads = await getRecentUploadsForUser(userId, 5);
-      const prompt = buildPromptFromUploads(uploads);
+        const uploads = await getRecentUploadsForUser(userId, 5);
+        const prompt = buildPromptFromUploads(uploads);
 
-      try {
-        const test = await generateTestWithOpenAI(prompt, 5, "MCQ");
-        console.log("Generated test items:", Array.isArray(test) ? test.length : "not array");
+        try {
+          const test = await generateTestWithOpenAI(prompt, 5, "MCQ");
+          console.log("Generated test items:", Array.isArray(test) ? test.length : "not array");
 
-        const scheduledTestId = await insertScheduledTest(schedule, userId, test);
-        console.log("Inserted scheduled_test id:", scheduledTestId);
+          const scheduledTestId = await insertScheduledTest(schedule, userId, test);
+          console.log("Inserted scheduled_test id:", scheduledTestId);
 
-        await markScheduleRun(schedule.id);
+          await markScheduleRun(schedule.id);
 
-        // send reminder if Twilio is configured
-        await sendWhatsappReminder(userId, scheduledTestId, test);
-      } catch (err) {
-        console.error("Failed to generate/insert/send for schedule", schedule.id, err?.message ?? err);
+          // send reminder if Twilio is configured
+          await sendWhatsappReminder(userId, scheduledTestId, test);
+        } catch (err) {
+          console.error("Failed to generate/insert/send for schedule", schedule.id, err?.message ?? err);
+        }
       }
+    }
+
+    // also process already-created pending scheduled_tests (send user + parent reminders)
+    const processed = await fetchDueScheduledTestsAndNotify();
+    if (processed && processed.length) {
+      console.log("Processed existing pending scheduled_tests:", processed.length);
+    } else {
+      console.log("No existing pending scheduled_tests to process.");
     }
 
     console.log("Scheduler finished at", isoNow());
