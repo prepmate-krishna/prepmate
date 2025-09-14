@@ -1,7 +1,7 @@
 {
-  "name": "preplift",
+  "name": "prepmate",
   "version": "1.0.0",
-  "description": "PrepLift — AI-powered exam prep platform",
+  "description": "PrepMate — AI-powered exam prep platform",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",

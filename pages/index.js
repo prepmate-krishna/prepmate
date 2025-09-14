@@ -1,22 +1,31 @@
+// pages/index.js
+import Head from "next/head";
+
 export default function Home() {
   return (
-    <div style={{
-      fontFamily: 'system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      height: '100vh', flexDirection: 'column', gap: 12, padding: 20
+    <div style={{ 
+      display: "flex", 
+      flexDirection: "column", 
+      justifyContent: "center", 
+      alignItems: "center", 
+      minHeight: "100vh", 
+      backgroundColor: "black", 
+      color: "#40E0D0" // Tiffany green
     }}>
-      <h1 style={{margin:0}}>Welcome to PrepLift — your preparation partner</h1>
-      <div style={{
-        width:180, height:180, borderRadius:18,
-        border:'2px dashed #ccc',
-        display:'flex', alignItems:'center', justifyContent:'center',
-        marginTop:8
-      }}>
-        <span>Logo (placeholder)</span>
-      </div>
-      <button style={{padding:'10px 18px', marginTop:18, cursor:'pointer'}}>
-        Get Started / Login
-      </button>
+      <Head>
+        <title>PrepMate</title>
+        <link rel="icon" href="/prepmate-logo.png" />
+      </Head>
+
+      <img 
+        src="/prepmate-logo.png" 
+        alt="PrepMate Logo" 
+        style={{ width: 180, height: "auto", marginBottom: 20 }}
+      />
+      <h1 style={{ fontSize: "2rem" }}>Welcome to PrepMate — Your Preparation Partner</h1>
+      <p style={{ maxWidth: 600, textAlign: "center", marginTop: 10 }}>
+        Start creating smart tests and track your progress.
+      </p>
     </div>
-  )
+  );
 }
