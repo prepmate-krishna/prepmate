@@ -98,7 +98,7 @@ export default function Step2SelectExam() {
     setTimeout(() => {
       setSaving(false);
       // Next: redirect to generate or step 3 if you implement
-      router.push("/generate");
+      router.push("/setup-profile-step3");
     }, 400);
   }
 

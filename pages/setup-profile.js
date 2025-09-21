@@ -105,7 +105,7 @@ export default function SetupProfile() {
     setTimeout(() => {
       setSaving(false);
       // go to generate page
-      router.push("/generate");
+      router.push("/setup-profile-step2");
     }, 500);
   }
 

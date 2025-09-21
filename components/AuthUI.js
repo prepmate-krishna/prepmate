@@ -35,7 +35,7 @@ export default function AuthUI() {
       setMessage(null);
       await supabaseClient.auth.signInWithOAuth({
         provider: "google",
-        options: { redirectTo: `${window.location.origin}/generate` }
+        options: { redirectTo: `${window.location.origin}/loading` }
       });
       // Supabase will redirect
     } catch (err) {
@@ -66,7 +66,7 @@ export default function AuthUI() {
       const { error } = await supabaseClient.auth.signInWithPassword({ email: email.trim(), password });
       if (error) throw error;
       setMessage({ type: "success", text: "Signed in — redirecting..." });
-      window.location.href = "/generate";
+      window.location.href = "/loading";
     } catch (err) {
       setMessage({ type: "error", text: err.message || String(err) });
     } finally {
